@@ -1,113 +1,75 @@
 import streamlit as st
-import os, json, requests, io
-import pandas as pd
-from supabase import create_client, Client
+import os
+import io
+import base64
+from PIL import Image
+
+# Import AI Libraries
 from google import genai
 from google.genai import types
-from pymarc import Record, Field
+from groq import Groq
+from openai import OpenAI
 
-# --- 1. INITIALIZATION ---
-# These must be set in Railway's "Variables" tab
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-ai_client = genai.Client(api_key=GEMINI_KEY)
-
+# 1. PAGE CONFIGURATION
 st.set_page_config(page_title="Metata AI", page_icon="📚", layout="wide")
 
-# --- 2. UTILITY FUNCTIONS ---
-def generate_marc(data):
-    """Maps JSON keys to MARC 21 tags."""
-    record = Record()
-    mapping = {'title': '245', 'author': '100', 'isbn': '020'}
-    for key, tag in mapping.items():
-        if data.get(key):
-            record.add_ordered_field(Field(tag=tag, indicators=['1','0'], subfields=['a', str(data[key])]))
-    return record.as_marc()
+# 2. SIDEBAR - MODEL SELECTION & API KEYS
+st.sidebar.title("Metata Control Panel")
+engine = st.sidebar.selectbox("Select AI Engine", ["Gemini 2.0 Flash", "Groq (Llama 3.2)", "GPT-4o"])
 
-def get_image_bytes(source, is_url=False):
-    """Standardizes input into bytes for the AI."""
-    if is_url:
-        res = requests.get(source, timeout=10)
-        return res.content
-    return source.getvalue()
+# Helper function for Base64 (needed for OpenAI/Groq)
+def to_base64(img_bytes):
+    return base64.b64encode(img_bytes).decode('utf-8')
 
-# --- 3. UI LAYOUT ---
-st.title("Metata: Professional Library Intelligence")
-st.markdown("---")
+# 3. MAIN UI
+st.title("Metata: Professional Library Cataloging")
+st.write(f"Currently using: **{engine}**")
 
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("📁 File Uploads (Max 3)")
-    uploaded_files = st.file_uploader("Drop images here", accept_multiple_files=True, type=['jpg','png','jpeg'])
-    files = uploaded_files[:3] if uploaded_files else []
+uploaded_file = st.file_uploader("Upload Book Cover or Title Page", type=['jpg', 'jpeg', 'png'])
 
-with col2:
-    st.subheader("🌐 Image URLs (Max 3)")
-    url_input = st.text_input("Paste links separated by '|'", placeholder="url1 | url2 | url3")
-    urls = [u.strip() for u in url_input.split("|") if u.strip()][:3] if url_input else []
+if uploaded_file:
+    # Display the image immediately
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("Source Image")
+        st.image(uploaded_file, use_container_width=True)
+    
+    with col2:
+        st.subheader("Metadata Results")
+        if st.button("Generate Catalog Entry"):
+            img_bytes = uploaded_file.getvalue()
+            prompt = "Extract book metadata: Title, Author, ISBN, Publisher, and Subject. Return as JSON."
 
-# --- 4. THE BATCH ENGINE ---
-if st.button("🚀 Run Batch Analysis"):
-    batch_queue = []
-    for f in files: batch_queue.append({"name": f.name, "source": f, "is_url": False})
-    for u in urls: batch_queue.append({"name": u.split('/')[-1], "source": u, "is_url": True})
-
-    if not batch_queue:
-        st.warning("Please provide at least one image or URL.")
-    else:
-        results_list = []
-        for item in batch_queue:
-            with st.status(f"Analyzing {item['name']}...", expanded=True) as status:
-                try:
-                    img_data = get_image_bytes(item['source'], item['is_url'])
-                    
-                    # CALL 1: DISCOVERY (Type, Language, & Validation)
-                    router_prompt = "Identify: {'label': (modern_book/film_poster), 'lang': (en/zh/es/fr), 'is_valid': bool}. Return JSON."
-                    res1 = ai_client.models.generate_content(
+            try:
+                # --- ENGINE 1: GEMINI ---
+                if "Gemini" in engine:
+                    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+                    response = client.models.generate_content(
                         model="gemini-2.0-flash",
-                        contents=[types.Part.from_bytes(data=img_data, mime_type="image/jpeg"), router_prompt]
+                        contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), prompt]
                     )
-                    
-                    discovery = json.loads(res1.text.replace('```json', '').replace('```', ''))
-                    
-                    if not discovery.get('is_valid'):
-                        st.error(f"❌ {item['name']} is not a library item.")
-                        continue
+                    st.json(response.text)
 
-                    # DATABASE STITCHING
-                    label, lang = discovery['label'], discovery['lang']
-                    task = supabase.table("item_prompts").select("prompt_text").eq("label", label).single().execute()
-                    lang_instr = supabase.table("language_prompts").select("formatting_instruction").eq("lang_code", lang).single().execute()
-                    
-                    combined_prompt = f"{task.data['prompt_text']} {lang_instr.data['formatting_instruction']}"
-                    
-                    # CALL 2: DEEP EXTRACTION
-                    res2 = ai_client.models.generate_content(
-                        model="gemini-2.0-flash",
-                        contents=[types.Part.from_bytes(data=img_data, mime_type="image/jpeg"), combined_prompt]
+                # --- ENGINE 2: GROQ ---
+                elif "Groq" in engine:
+                    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+                    b64_img = to_base64(img_bytes)
+                    chat_completion = client.chat.completions.create(
+                        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}]}],
+                        model="llama-3.2-11b-vision-preview",
                     )
-                    
-                    metadata = json.loads(res2.text.replace('```json', '').replace('```', ''))
-                    metadata.update({'item_type': label, 'language': lang, 'filename': item['name']})
-                    results_list.append(metadata)
-                    
-                    status.update(label=f"Completed: {item['name']}", state="complete")
-                    
-                except Exception as e:
-                    st.error(f"Error processing {item['name']}: {e}")
+                    st.write(chat_completion.choices[0].message.content)
 
-        # --- 5. EXPORT SECTION ---
-        if results_list:
-            st.divider()
-            df = pd.DataFrame(results_list)
-            st.dataframe(df)
+                # --- ENGINE 3: OPENAI ---
+                elif "GPT-4o" in engine:
+                    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                    b64_img = to_base64(img_bytes)
+                    response = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}]}],
+                    )
+                    st.write(response.choices[0].message.content)
 
-            ex1, ex2 = st.columns(2)
-            with ex1:
-                st.download_button("📥 CSV Export", df.to_csv(index=False), "metata_batch.csv", "text/csv")
-            with ex2:
-                marc_binary = b"".join([generate_marc(row) for row in results_list])
-                st.download_button("📥 MARC Export (.mrc)", marc_binary, "metata_records.mrc", "application/marc")
+            except Exception as e:
+                st.error(f"Engine Error: {e}. Please check your API keys in Railway.")
