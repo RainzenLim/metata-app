@@ -1,0 +1,7 @@
+streamlit
+google-genai
+supabase
+pymarc
+pandas
+requests
+pillow
