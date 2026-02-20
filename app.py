@@ -3,7 +3,7 @@ import os
 from supabase import create_client, Client
 
 # --- INITIALIZATION ---
-supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+supabase: Client = create_client(os.getenv(SUPABASE_URL), os.getenv(SUPABASE_KEY))
 
 # --- USER MANAGEMENT FUNCTIONS ---
 def sign_in(email, password):
@@ -53,3 +53,4 @@ else:
     
     # YOUR ORIGINAL APP LOGIC GOES HERE (The 3+3 Batch Engine)
     # Important: When saving to DB, use st.session_state.user.id to tag the record!
+
