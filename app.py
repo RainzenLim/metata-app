@@ -61,8 +61,15 @@ if st.sidebar.button("Logout"):
 st.title("Metata: Professional Library Intelligence")
 
 # --- 5. SUBSCRIPTION CHECK ---
-profile = supabase.table("profiles").select("is_paid").eq("id", st.session_state.user.id).single().execute()
-is_paid = profile.data.get('is_paid', False)
+response = supabase.table("profiles").select("is_paid").eq("id", st.session_state.user.id).execute()
+
+# Check if we actually found a row
+if response.data and len(response.data) > 0:
+    is_paid = response.data[0].get('is_paid', False)
+else:
+    # If no profile exists, default to free and maybe show a warning
+    is_paid = False
+    st.sidebar.warning("Profile not initialized. Please try logging out and back in.")
 
 if not is_paid:
     st.warning("💳 **Free Tier Active**: You are limited to 1 item per scan. Upgrade to Pro for 3+3 Batch processing.")
@@ -135,5 +142,6 @@ if st.button("🚀 Run Analysis"):
             df = pd.DataFrame(results)
             st.dataframe(df)
             st.download_button("📥 Download Results (CSV)", df.to_csv(index=False), "metata_results.csv")
+
 
 
