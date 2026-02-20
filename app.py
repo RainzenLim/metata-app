@@ -1,64 +1,139 @@
 import streamlit as st
-import os
+import os, json, requests
+import pandas as pd
 from supabase import create_client, Client
+from google import genai
+from google.genai import types
+from pymarc import Record, Field
 
-# --- INITIALIZATION ---
+# --- 1. INITIALIZATION & SECRETS ---
+st.set_page_config(page_title="Metata Pro", page_icon="📚", layout="wide")
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Missing Supabase Credentials. Please check Railway Variables.")
-    st.stop() # Prevents the 'SupabaseException' crash
+if not all([SUPABASE_URL, SUPABASE_KEY, GEMINI_KEY]):
+    st.error("Environment variables missing. Please check Railway settings.")
+    st.stop()
 
-supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# --- USER MANAGEMENT FUNCTIONS ---
-def sign_in(email, password):
-    try:
-        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        st.session_state.user = res.user
-        st.success("Welcome back!")
-        st.rerun()
-    except Exception as e:
-        st.error(f"Login failed: {e}")
+# --- 2. SESSION STATE MANAGEMENT ---
+if 'user' not in st.session_state:
+    st.session_state.user = None
 
-def sign_up(email, password):
-    try:
-        supabase.auth.sign_up({"email": email, "password": password})
-        st.info("Check your email for a confirmation link!")
-    except Exception as e:
-        st.error(f"Signup failed: {e}")
+# --- 3. AUTHENTICATION UI ---
+if st.session_state.user is None:
+    st.title("Metata | Login")
+    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+    
+    with tab1:
+        email = st.text_input("Email", key="l_email")
+        password = st.text_input("Password", type="password", key="l_pass")
+        if st.button("Login"):
+            try:
+                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                st.session_state.user = res.user
+                st.rerun()
+            except Exception as e:
+                st.error(f"Login Error: {e}")
+    
+    with tab2:
+        new_email = st.text_input("Email", key="s_email")
+        new_pass = st.text_input("Password", type="password", key="s_pass")
+        if st.button("Create Account"):
+            try:
+                supabase.auth.sign_up({"email": new_email, "password": new_pass})
+                st.info("Account created! Please check your email for confirmation.")
+            except Exception as e:
+                st.error(f"Signup Error: {e}")
+    st.stop()
 
-def logout():
+# --- 4. THE CORE APP (LOGGED IN) ---
+st.sidebar.write(f"Logged in: **{st.session_state.user.email}**")
+if st.sidebar.button("Logout"):
     supabase.auth.sign_out()
     st.session_state.user = None
     st.rerun()
 
-# --- AUTH UI LOGIC ---
-if 'user' not in st.session_state:
-    st.session_state.user = None
+st.title("Metata: Professional Library Intelligence")
 
-if st.session_state.user is None:
-    tab1, tab2 = st.tabs(["Login", "Sign Up"])
-    
-    with tab1:
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_pwd")
-        if st.button("Login"):
-            sign_in(email, password)
-            
-    with tab2:
-        new_email = st.text_input("Email", key="signup_email")
-        new_password = st.text_input("Password", type="password", key="signup_pwd")
-        if st.button("Create Account"):
-            sign_up(new_email, new_password)
-else:
-    # --- LOGGED IN: SHOW THE APP ---
-    st.sidebar.write(f"Logged in as: {st.session_state.user.email}")
-    if st.sidebar.button("Logout"):
-        logout()
-    
-    # YOUR ORIGINAL APP LOGIC GOES HERE (The 3+3 Batch Engine)
-    # Important: When saving to DB, use st.session_state.user.id to tag the record!
+# --- 5. SUBSCRIPTION CHECK ---
+profile = supabase.table("profiles").select("is_paid").eq("id", st.session_state.user.id).single().execute()
+is_paid = profile.data.get('is_paid', False)
+
+if not is_paid:
+    st.warning("💳 **Free Tier Active**: You are limited to 1 item per scan. Upgrade to Pro for 3+3 Batch processing.")
+
+# --- 6. INPUT SECTION ---
+col1, col2 = st.columns(2)
+with col1:
+    files = st.file_uploader("📁 Upload Images (Max 3)", accept_multiple_files=True, type=['jpg','png','jpeg'])
+with col2:
+    url_input = st.text_input("🌐 Image URLs (URL1 | URL2 | URL3)", placeholder="URL1 | URL2")
+
+# --- 7. BATCH ENGINE ---
+if st.button("🚀 Run Analysis"):
+    # Unified Queue
+    queue = [{"name": f.name, "source": f, "is_url": False} for f in (files[:3] if files else [])]
+    urls = [u.strip() for u in url_input.split("|") if u.strip()][:3]
+    for u in urls:
+        queue.append({"name": u.split('/')[-1], "source": u, "is_url": True})
+
+    # ENFORCE PAYWALL
+    if not is_paid and len(queue) > 1:
+        st.error(f"Limit exceeded. Free users can process 1 item. You requested {len(queue)}.")
+        st.stop()
+
+    if not queue:
+        st.warning("Please provide an image.")
+    else:
+        results = []
+        for item in queue:
+            with st.status(f"Scanning {item['name']}...") as status:
+                try:
+                    # Get Bytes
+                    if item['is_url']:
+                        img_data = requests.get(item['source']).content
+                    else:
+                        img_data = item['source'].getvalue()
+
+                    # AI Step 1: Discover
+                    router_prompt = "Identify: {'label': (modern_book/film_poster), 'lang': (en/zh), 'is_valid': bool}. JSON only."
+                    res1 = ai_client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents=[types.Part.from_bytes(data=img_data, mime_type="image/jpeg"), router_prompt]
+                    )
+                    discovery = json.loads(res1.text.replace('```json', '').replace('```', ''))
+
+                    if not discovery.get('is_valid'):
+                        st.error(f"Skipped {item['name']}: Not a library item.")
+                        continue
+
+                    # Fetch Modular Prompts
+                    task = supabase.table("item_prompts").select("prompt_text").eq("label", discovery['label']).single().execute()
+                    lang = supabase.table("language_prompts").select("formatting_instruction").eq("lang_code", discovery['lang']).single().execute()
+                    
+                    # AI Step 2: Extraction
+                    final_prompt = f"{task.data['prompt_text']} {lang.data['formatting_instruction']}"
+                    res2 = ai_client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents=[types.Part.from_bytes(data=img_data, mime_type="image/jpeg"), final_prompt]
+                    )
+                    metadata = json.loads(res2.text.replace('```json', '').replace('```', ''))
+                    metadata['source'] = item['name']
+                    results.append(metadata)
+                    status.update(label=f"Done: {item['name']}", state="complete")
+
+                except Exception as e:
+                    st.error(f"Error on {item['name']}: {e}")
+
+        if results:
+            st.divider()
+            df = pd.DataFrame(results)
+            st.dataframe(df)
+            st.download_button("📥 Download Results (CSV)", df.to_csv(index=False), "metata_results.csv")
 
 
