@@ -110,7 +110,7 @@ if st.button("🚀 Run Analysis"):
                     # AI Step 1: Discover
                     router_prompt = "Identify: {'label': (modern_book/film_poster), 'lang': (en/zh), 'is_valid': bool}. JSON only."
                     res1 = ai_client.models.generate_content(
-                        model="gemini-2.0-flash",
+                        model="gemini-2.5-pro",
                         contents=[types.Part.from_bytes(data=img_data, mime_type="image/jpeg"), router_prompt]
                     )
                     discovery = json.loads(res1.text.replace('```json', '').replace('```', ''))
@@ -126,7 +126,7 @@ if st.button("🚀 Run Analysis"):
                     # AI Step 2: Extraction
                     final_prompt = f"{task.data['prompt_text']} {lang.data['formatting_instruction']}"
                     res2 = ai_client.models.generate_content(
-                        model="gemini-2.0-flash",
+                        model="gemini-2.5-pro",
                         contents=[types.Part.from_bytes(data=img_data, mime_type="image/jpeg"), final_prompt]
                     )
                     metadata = json.loads(res2.text.replace('```json', '').replace('```', ''))
@@ -142,6 +142,7 @@ if st.button("🚀 Run Analysis"):
             df = pd.DataFrame(results)
             st.dataframe(df)
             st.download_button("📥 Download Results (CSV)", df.to_csv(index=False), "metata_results.csv")
+
 
 
 
