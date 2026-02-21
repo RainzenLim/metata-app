@@ -4,7 +4,8 @@ from pymarc import Record, Field, Subfield
 
 def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_paid):
     """
-    Runs both steps and returns a tuple: (discovery_data, final_metadata)
+    Runs Scout Discovery and Deep Extraction.
+    Returns a tuple: (discovery_dict, metadata_dict)
     """
     try:
         # --- STEP 1: SCOUT DISCOVERY ---
@@ -24,7 +25,7 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
         discovery = json.loads(res1.text.strip().replace('```json', '').replace('```', ''))
 
         if not discovery.get('is_valid'):
-            return discovery, {"error": "Scout rejected item."}
+            return discovery, {"error": "Item rejected by Scout."}
 
         # --- STEP 2: DEEP EXTRACTION ---
         tier = 'paid' if user_is_paid else 'free'
@@ -47,7 +48,7 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
         return {"error": "Logic failed"}, {"error": str(e)}
 
 def convert_llm_json_to_marc(llm_results):
-    """Fixed for pymarc v5+ using Subfield objects"""
+    """Converts a list of dicts to binary MARC21 (pymarc v5+ style)"""
     memory_file = io.BytesIO()
     for entry in llm_results:
         record = Record()
