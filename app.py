@@ -112,7 +112,7 @@ with tab_batch:
                         # Step 1: Discover
                         router_prompt = "Identify: {'label': (modern_book/film_poster), 'lang': (en/zh/mi), 'is_valid': bool}. JSON only."
                         res1 = ai_client.models.generate_content(
-                            model="gemini-2.0-flash",
+                            model="gemini-2.5-pro",
                             contents=[types.Part.from_bytes(data=img['bytes'], mime_type="image/jpeg"), router_prompt]
                         )
                         discovery = json.loads(res1.text.strip().replace('```json', '').replace('```', ''))
@@ -184,3 +184,4 @@ with tab_prompts:
                     if st.button("Save", key=f"btn_lp_{lp['id']}"):
                         supabase.table("language_prompts").update({"formatting_instruction": new_f}).eq("id", lp['id']).execute()
                         st.success("Updated!")
+
