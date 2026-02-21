@@ -52,27 +52,32 @@ with st.sidebar:
 # --- TABS NAVIGATION ---
 tab_batch, tab_history, tab_prompts = st.tabs(["🚀 New Batch", "📜 History", "⚙️ Prompt Manager"])
 
-# --- RESTORED NEW BATCH LOGIC ---
+# --- TAB: NEW BATCH ---
 with tab_batch:
     st.title("Metata Smart Batch Engine")
     
-    # 1. Unified Input Area
+    # Unified Input Area
     with st.container(border=True):
         st.subheader("📥 Add Images (Files or URLs)")
         files = st.file_uploader("Upload local images", accept_multiple_files=True, type=['jpg','png','jpeg'])
         url_input = st.text_area("Paste Image URLs (one per line or separated by | )")
 
-    # 2. Combine and Queue
+    # Queue Logic
     raw_q = [{"name": f.name, "source": f, "is_url": False} for f in (files[:3] if files else [])]
     urls = [u.strip() for u in url_input.replace('\n', '|').split("|") if u.strip()][:3]
     for u in urls:
         raw_q.append({"name": u.split('/')[-1], "source": u, "is_url": True})
 
-    # 3. Preview, Rotate, and Ready List
-    ready = []
+    # --- NEW: BATCH STATUS BAR ---
     if raw_q:
+        q_count = len(raw_q)
+        st.write("") # Spacer
+        st.success(f"📋 **Worklist Status:** {q_count} item(s) ready for orientation.")
+        
         st.divider()
         st.subheader("🖼️ Preview & Manual Orientation")
+        
+        ready = []
         cols = st.columns(len(raw_q))
         for i, item in enumerate(raw_q):
             with cols[i]:
@@ -90,19 +95,15 @@ with tab_batch:
                     pil_img.save(buf, format="JPEG")
                     ready.append({"name": item['name'], "bytes": buf.getvalue()})
                 except:
-                    st.error(f"Failed to load {item['name']}")
+                    st.error(f"Failed: {item['name']}")
 
-    # 4. Action Button
-    if st.button("🚀 Run Analysis", use_container_width=True):
-        if not ready:
-            st.warning("Please add images first.")
-        else:
+        # --- EXECUTION ---
+        if st.button("🚀 Run Analysis on Worklist", use_container_width=True):
             results = []
             for img in ready:
                 with st.status(f"Scanning {img['name']}..."):
                     res = run_metadata_extraction(ai_client, supabase, img['bytes'], img['name'], is_paid)
                     if "error" not in res:
-                        # Save to History
                         supabase.table("catalog_history").insert({
                             "user_id": st.session_state.user.id,
                             "filename": img['name'],
@@ -112,9 +113,9 @@ with tab_batch:
             
             if results:
                 st.session_state.current_results = results
-                st.success("Batch Complete!")
+                st.rerun()
 
-    # 5. Result Display & Export
+    # --- RESULT DISPLAY & EXPORT ---
     if 'current_results' in st.session_state:
         res = st.session_state.current_results
         t_view, t_marc = st.tabs(["📊 Metadata Table", "📑 MARC View"])
@@ -129,11 +130,20 @@ with tab_batch:
             m_bin = convert_llm_json_to_marc(res)
             st.download_button("Download Binary MARC (.mrc)", m_bin, "metata_batch.mrc")
 
-# --- OTHER TABS (Placeholder) ---
+# --- TAB: HISTORY ---
 with tab_history:
     st.header("Archival History")
-    # Add your history fetch logic here
+    hist = supabase.table("catalog_history").select("*").eq("user_id", st.session_state.user.id).order("created_at", desc=True).execute()
+    if hist.data:
+        for entry in hist.data:
+            with st.expander(f"{entry['created_at'][:10]} | {entry['filename']}"):
+                st.json(entry['metadata'])
 
+# --- TAB: PROMPT MANAGER ---
 with tab_prompts:
-    st.header("Prompt Manager")
-    # Add your admin prompt logic here
+    st.header("Metata Engine Logic")
+    if user_role != 'admin':
+        st.warning("Locked: Admin only.")
+    else:
+        # Include your model selection and prompt editing UI here
+        st.info("Manage your DB-driven models and modular prompts here.")
