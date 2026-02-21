@@ -42,15 +42,16 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
 
         if not discovery.get('is_valid'):
             return {"error": f"AI determined item is invalid for labels: {valid_labels}", "filename": filename}
-        
-        print(discovery)
-        
+               
         # 3. MODULAR PROMPT FETCH (Based on AI's choice)
         task = supabase.table("item_prompts").select("prompt_text").eq("label", discovery['label']).single().execute()
         lang = supabase.table("language_prompts").select("formatting_instruction").eq("lang_code", discovery['lang']).single().execute()
         
         # 4. STEP 2: EXTRACTION
         final_p = f"{task.data['prompt_text']} {lang.data['formatting_instruction']}"
+
+        print(final_p)
+        
         res2 = ai_client.models.generate_content(
             model=EXT_MODEL,
             contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), final_p]
@@ -64,6 +65,7 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
 
     except Exception as e:
         return {"error": str(e), "filename": filename}
+
 
 
 
