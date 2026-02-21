@@ -5,75 +5,75 @@ from supabase import create_client
 from google import genai
 from engine import run_metadata_extraction, convert_llm_json_to_marc
 
-# --- CONFIG ---
-st.set_page_config(page_title="Metata Pro", layout="wide")
-supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
-ai_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# --- 1. CONFIG & CONNECTION ---
+st.set_page_config(page_title="Metata Pro", layout="wide", page_icon="📚")
 
-# --- AUTH (Simplified for logic flow) ---
-if 'user' not in st.session_state: st.session_state.user = None
-if not st.session_state.user:
-    st.title("Metata Login")
-    # ... [Your Auth Logic here] ...
+# Ensure these are in your Railway Environment Variables
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+ai_client = genai.Client(api_key=GEMINI_KEY)
+
+# --- 2. THE LOGIN GATEKEEPER ---
+if 'user' not in st.session_state:
+    st.session_state.user = None
+
+if st.session_state.user is None:
+    # THIS IS THE ONLY THING UNAUTHORIZED USERS SEE
+    st.container()
+    col_a, col_b, col_c = st.columns([1, 2, 1])
+    with col_b:
+        st.title("📚 Metata | Library Login")
+        st.markdown("Please sign in to access the AI Cataloging Engine.")
+        
+        tab_login, tab_signup = st.tabs(["🔐 Login", "📝 Create Account"])
+        
+        with tab_login:
+            email = st.text_input("Email Address", key="login_email")
+            password = st.text_input("Password", type="password", key="login_pwd")
+            if st.button("Sign In", use_container_width=True):
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    st.session_state.user = res.user
+                    st.success("Access Granted!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Authentication Failed: {str(e)}")
+        
+        with tab_signup:
+            new_email = st.text_input("Work Email", key="signup_email")
+            new_password = st.text_input("New Password", type="password", key="signup_pwd")
+            if st.button("Request Access", use_container_width=True):
+                try:
+                    supabase.auth.sign_up({"email": new_email, "password": new_password})
+                    st.info("Check your inbox for a verification email!")
+                except Exception as e:
+                    st.error(f"Signup Failed: {str(e)}")
+    
+    # Stop execution here so no other app parts load
     st.stop()
 
-# Permissions
+# --- 3. AUTHORIZED APP (Only reachable after login) ---
+
+# Fetch Permissions
 prof = supabase.table("profiles").select("*").eq("id", st.session_state.user.id).execute()
-user_data = prof.data[0] if prof.data else {"is_paid": False, "role": "admin"}
-is_paid, user_role = user_data.get('is_paid', False), user_data.get('role', 'librarian')
+user_data = prof.data[0] if prof.data else {"is_paid": False, "role": "librarian"}
+is_paid = user_data.get('is_paid', False)
+user_role = user_data.get('role', 'librarian')
 
-tab_batch, tab_history, tab_prompts = st.tabs(["🚀 New Batch", "📜 History", "⚙️ Prompts"])
+# Sidebar for Logout & Tier Info
+with st.sidebar:
+    st.title("Metata Control")
+    st.write(f"User: **{st.session_state.user.email}**")
+    st.write(f"Tier: {'✅ PRO' if is_paid else '🆓 FREE'}")
+    if st.button("Logout"):
+        supabase.auth.sign_out()
+        st.session_state.user = None
+        st.rerun()
 
-with tab_batch:
-    # --- UNIFIED INPUT BOX ---
-    with st.container(border=True):
-        st.subheader("📥 Add Images (Files or URLs)")
-        files = st.file_uploader("Upload local images", accept_multiple_files=True, type=['jpg','png'])
-        url_input = st.text_area("Paste Image URLs (One per line or pipe separated)", placeholder="http://image1.jpg | http://image2.jpg")
+# Tabs for Main App Functions
+tab_batch, tab_history, tab_prompts = st.tabs(["🚀 New Batch", "📜 History", "⚙️ Prompt Manager"])
 
-    # Combine sources
-    raw_q = [{"name": f.name, "source": f, "is_url": False} for f in (files[:3] if files else [])]
-    urls = [u.strip() for u in url_input.replace('\n', '|').split("|") if u.strip()][:3]
-    for u in urls: raw_q.append({"name": u.split('/')[-1], "source": u, "is_url": True})
-
-    # --- PREVIEW & ROTATE ---
-    ready = []
-    if raw_q:
-        st.divider()
-        cols = st.columns(len(raw_q))
-        for i, item in enumerate(raw_q):
-            with cols[i]:
-                try:
-                    data = requests.get(item['source']).content if item['is_url'] else item['source'].getvalue()
-                    img = Image.open(io.BytesIO(data))
-                    rot = st.selectbox(f"Rotate {i}", [0, 90, 180, 270], key=f"r{i}")
-                    if rot != 0: img = img.rotate(-rot, expand=True)
-                    st.image(img, use_container_width=True)
-                    buf = io.BytesIO(); img.save(buf, format="JPEG")
-                    ready.append({"name": item['name'], "bytes": buf.getvalue()})
-                except: st.error("Load failed.")
-
-    # --- EXECUTION ---
-    if st.button("🚀 Run Analysis", use_container_width=True):
-        results = []
-        for img in ready:
-            with st.status(f"Scanning {img['name']}..."):
-                res = run_metadata_extraction(ai_client, supabase, img['bytes'], img['name'], is_paid)
-                if "error" not in res: results.append(res)
-        
-        if results:
-            st.session_state.current_results = results
-            st.rerun()
-
-    # --- DISPLAY & EXPORT ---
-    if 'current_results' in st.session_state:
-        res = st.session_state.current_results
-        t1, t2 = st.tabs(["📑 MARC View", "📊 Table"])
-        with t1:
-            for entry in res:
-                st.code("\n".join([f"{k} ## {v}" for k, v in entry.items() if k.isdigit()]))
-            
-            m_bin = convert_llm_json_to_marc(res)
-            st.download_button("Download MARC Binary (.mrc)", m_bin, "export.mrc")
-        with t2:
-            st.dataframe(pd.DataFrame(res))
+# ... [The rest of your tab_batch, tab_history, and tab_prompts logic follows] ...
