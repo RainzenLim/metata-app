@@ -18,8 +18,8 @@ if st.session_state.user is None:
     col_a, col_b, col_c = st.columns([1, 2, 1])
     with col_b:
         st.title("📚 Metata Login")
-        e = st.text_input("Email")
-        p = st.text_input("Password", type="password")
+        e = st.text_input("Email", key="login_email")
+        p = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login", use_container_width=True):
             try:
                 res = supabase.auth.sign_in_with_password({"email": e, "password": p})
@@ -28,7 +28,7 @@ if st.session_state.user is None:
             except: st.error("Authentication failed.")
     st.stop()
 
-# --- APP LOADED ---
+# --- APP CONTENT (Authorized) ---
 prof = supabase.table("profiles").select("*").eq("id", st.session_state.user.id).execute()
 user_data = prof.data[0] if prof.data else {"is_paid": False, "role": "librarian"}
 is_paid = user_data.get('is_paid', False)
@@ -50,7 +50,7 @@ with tab_batch:
 
     ready = []
     if raw_q:
-        st.success(f"📋 **Worklist:** {len(raw_q)} items loaded.")
+        st.info(f"📋 **Worklist:** {len(raw_q)} items loaded.")
         cols = st.columns(len(raw_q))
         for i, item in enumerate(raw_q):
             with cols[i]:
@@ -70,21 +70,21 @@ with tab_batch:
             with st.container(border=True):
                 st.write(f"### 🔎 Analyzing: {item['name']}")
                 with st.status("AI Engines Working...") as status:
-                    # Capture Tuple
+                    # Unpack Discovery and Metadata
                     discovery, meta = run_metadata_extraction(ai_client, supabase, item['bytes'], item['name'], is_paid)
                     
-                    # Display Step 1
-                    st.write("**Step 1: Discovery**")
+                    # Display Step 1 (Discovery) results on screen
+                    st.write("**Step 1: Scout Report**")
                     c1, c2 = st.columns(2)
-                    c1.info(f"🏷️ Label: {discovery.get('label')}")
-                    c2.info(f"🌍 Lang: {discovery.get('lang')}")
+                    c1.info(f"🏷️ Label: {discovery.get('label', 'Unknown')}")
+                    c2.info(f"🌍 Lang: {discovery.get('lang', 'Unknown')}")
                     
                     if "error" in meta:
                         st.error(f"Step 2 Failed: {meta['error']}")
                     else:
                         st.success("Step 2: Metadata Extracted")
                         meta['_filename'] = item['name']
-                        results.append(meta) # Append the dict only
+                        results.append(meta) 
                 status.update(label="Scanning Complete", state="complete")
         
         if results:
@@ -97,6 +97,7 @@ with tab_batch:
         with t_tab: st.dataframe(pd.DataFrame(res))
         with t_marc:
             for entry in res:
+                # Filter for MARC keys (numeric)
                 lines = [f"{k} ## {v}" for k, v in entry.items() if k.isdigit()]
                 st.code("\n".join(lines))
             st.download_button("Download .mrc", convert_llm_json_to_marc(res), "batch.mrc")
