@@ -2,6 +2,16 @@ import json, io
 from google.genai import types
 from pymarc import Record, Field, Subfield 
 
+def clean_json_output(raw_text):
+    """Ensures AI output is a dictionary, even if returned as a list."""
+    try:
+        data = json.loads(raw_text.strip().replace('```json', '').replace('```', ''))
+        if isinstance(data, list):
+            return data[0] if data else {}
+        return data
+    except:
+        return {"error": "Invalid JSON format"}
+
 def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_paid):
     """
     Runs Scout Discovery and Deep Extraction.
@@ -16,15 +26,15 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
         valid_labels = [item['label'] for item in item_keys.data]
         valid_langs = [l['lang_code'] for l in lang_keys.data]
 
-        router_p = f"Identify: {{'label': {valid_labels}, 'lang': {valid_langs}, 'is_valid': bool}}"
+        router_p = f"Identify: {{'label': {valid_labels}, 'lang': {valid_langs}, 'is_valid': bool}}. JSON only."
         
         res1 = ai_client.models.generate_content(
             model=scout_cfg.data['model_id'], 
             contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), router_p]
         )
-        discovery = json.loads(res1.text.strip().replace('```json', '').replace('```', ''))
+        discovery = clean_json_output(res1.text)
 
-        if not discovery.get('is_valid'):
+        if not discovery.get('is_valid', False):
             return discovery, {"error": "Item rejected by Scout."}
 
         # --- STEP 2: DEEP EXTRACTION ---
@@ -41,11 +51,11 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
             contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), final_p]
         )
         
-        meta = json.loads(res2.text.strip().replace('```json', '').replace('```', ''))
+        meta = clean_json_output(res2.text)
         return discovery, meta
 
     except Exception as e:
-        return {"error": "Logic failed"}, {"error": str(e)}
+        return {"error": "Discovery failed"}, {"error": str(e)}
 
 def convert_llm_json_to_marc(llm_results):
     """Converts a list of dicts to binary MARC21 (pymarc v5+ style)"""
