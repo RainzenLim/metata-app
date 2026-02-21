@@ -5,6 +5,8 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
     try:
         # 1. FETCH DYNAMIC MODELS
         # Fetch the 'Scout' (Router) model
+
+        print("pppp")
         scout_cfg = supabase.table("model_settings").select("model_id").eq("tier_name", 'scout').single().execute()
         SCOUT_MODEL = scout_cfg.data['model_id']
 
@@ -49,4 +51,5 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
 
     except Exception as e:
         return {"error": str(e)}
+
 
