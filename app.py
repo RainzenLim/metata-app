@@ -65,7 +65,7 @@ tab_batch, tab_history = st.tabs(["🚀 New Batch", "📜 Scan History"])
 
 with tab_batch:
     st.title("Metata Smart Batch Engine")
-    TARGET_MODEL = "gemini-2.0-pro" if is_paid else "gemini-2.0-pro"
+    TARGET_MODEL = "gemini-2.5-pro" if is_paid else "gemini-2.5-pro"
     
     col1, col2 = st.columns(2)
     with col1:
@@ -151,3 +151,4 @@ with tab_history:
         for entry in hist_res.data:
             with st.expander(f"{entry['created_at'][:10]} | {entry['filename']}"):
                 st.json(entry['metadata'])
+
