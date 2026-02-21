@@ -27,12 +27,15 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
         valid_langs = [l['lang_code'] for l in lang_keys.data]
 
         router_p = f"Identify: {{'label': {valid_labels}, 'lang': {valid_langs}, 'is_valid': bool}}. JSON only."
-        
+
+        print(router_p)
         res1 = ai_client.models.generate_content(
             model=scout_cfg.data['model_id'], 
             contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), router_p]
         )
         discovery = clean_json_output(res1.text)
+
+        print(discovery)
 
         if not discovery.get('is_valid', False):
             return discovery, {"error": "Item rejected by Scout."}
@@ -73,3 +76,4 @@ def convert_llm_json_to_marc(llm_results):
                 record.add_ordered_field(Field(tag=tag, indicators=['0','0'], subfields=subfields))
         memory_file.write(record.as_marc())
     return memory_file.getvalue()
+
