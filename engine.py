@@ -23,7 +23,14 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
 
         if not discovery.get('is_valid'):
             return {"error": "Invalid library item", "filename": filename}
-
+        # Temporary debug: allow the AI to continue even if it thinks it's invalid
+        if not discovery.get('is_valid'):
+             # Log the reason but don't stop the script
+             print(f"DEBUG: AI thought {filename} was invalid.") 
+             # Force it to 'modern_book' for testing
+             discovery['label'] = 'modern_book' 
+             discovery['lang'] = 'en'
+        
         # 3. MODULAR PROMPT FETCH
         task = supabase.table("item_prompts").select("prompt_text").eq("label", discovery['label']).single().execute()
         lang = supabase.table("language_prompts").select("formatting_instruction").eq("lang_code", discovery['lang']).single().execute()
@@ -42,3 +49,4 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
 
     except Exception as e:
         return {"error": str(e)}
+
