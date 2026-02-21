@@ -1,6 +1,6 @@
 import json, io
 from google.genai import types
-from pymarc import Record, Field
+from pymarc import Record, Field, Subfield  # Added Subfield import
 
 def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_paid):
     try:
@@ -47,16 +47,45 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
         return {"error": str(e)}
 
 def convert_llm_json_to_marc(llm_results):
+    """
+    Converts LLM JSON to binary MARC21.
+    Fixed for pymarc v5+ using Subfield objects.
+    """
     memory_file = io.BytesIO()
+    
     for entry in llm_results:
         record = Record()
+        
         for tag, data in entry.items():
-            if tag.isdigit():
+            # Skip metadata keys (like '_filename')
+            if not tag.isdigit():
+                continue
+            
+            try:
+                subfields_list = []
+                
+                # Case A: LLM gave nested subfields {"a": "Title", "c": "Author"}
                 if isinstance(data, dict):
-                    subfields = []
-                    for k, v in data.items(): subfields.extend([k, str(v)])
-                    record.add_ordered_field(Field(tag=tag, indicators=['0','0'], subfields=subfields))
+                    for code, val in data.items():
+                        # Create a Subfield object for each entry
+                        subfields_list.append(Subfield(code=code, value=str(val)))
+                
+                # Case B: LLM gave a simple string "Title"
                 else:
-                    record.add_ordered_field(Field(tag=tag, indicators=[' ',' '], subfields=['a', str(data)]))
+                    subfields_list.append(Subfield(code='a', value=str(data)))
+
+                # Add the field to the record using the new list of Subfield objects
+                record.add_ordered_field(
+                    Field(
+                        tag=tag,
+                        indicators=[' ', ' '],
+                        subfields=subfields_list
+                    )
+                )
+            except Exception as e:
+                print(f"Skipping tag {tag} due to error: {e}")
+
         memory_file.write(record.as_marc())
+    
     return memory_file.getvalue()
+
