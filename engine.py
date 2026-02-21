@@ -26,7 +26,7 @@ def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_pa
         valid_labels = [item['label'] for item in item_keys.data]
         valid_langs = [l['lang_code'] for l in lang_keys.data]
 
-        router_p = f"Identify: {{'label': {valid_labels}, 'lang': {valid_langs}, 'is_valid': bool}}. JSON only."
+        router_p = f"Identify: {{'types': {valid_labels}, 'languages': {valid_langs}, 'is_valid': bool}}. JSON only."
         print(scout_cfg.data['model_id'])
         print(router_p)
         res1 = ai_client.models.generate_content(
@@ -76,5 +76,6 @@ def convert_llm_json_to_marc(llm_results):
                 record.add_ordered_field(Field(tag=tag, indicators=['0','0'], subfields=subfields))
         memory_file.write(record.as_marc())
     return memory_file.getvalue()
+
 
 
