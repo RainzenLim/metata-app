@@ -2,59 +2,67 @@ import json, io
 from google.genai import types
 from pymarc import Record, Field, Subfield 
 
-def clean_json_output(raw_text):
-    """Ensures AI output is a dictionary, even if returned as a list."""
-    try:
-        data = json.loads(raw_text.strip().replace('```json', '').replace('```', ''))
-        if isinstance(data, list):
-            return data[0] if data else {}
-        return data
-    except:
-        return {"error": "Invalid JSON format"}
-
 def run_metadata_extraction(ai_client, supabase, img_bytes, filename, user_is_paid):
     """
-    Runs Scout Discovery and Deep Extraction.
-    Returns a tuple: (discovery_dict, metadata_dict)
+    Step 1: 5-Step Scout Discovery (One-line format)
+    Step 2: Deep Extraction (MARC JSON format)
     """
     try:
-        # --- STEP 1: SCOUT DISCOVERY ---
+        # --- 1. SETUP MODELS & KEYS ---
         scout_cfg = supabase.table("model_settings").select("model_id").eq("tier_name", 'scout').single().execute()
         item_keys = supabase.table("item_prompts").select("label").execute()
         lang_keys = supabase.table("language_prompts").select("lang_code").execute()
         
-        valid_labels = [item['label'] for item in item_keys.data]
-        valid_langs = [l['lang_code'] for l in lang_keys.data]
+        type_list = [item['label'] for item in item_keys.data]
+        lang_list = "~".join([l['lang_code'] for l in lang_keys.data])
 
-        router_p = f"Identify: {{'types': {valid_labels}, 'languages': {valid_langs}, 'is_valid': bool}}. JSON only."
-        print(scout_cfg.data['model_id'])
-        print(router_p)
+        # --- 2. STEP 1: SCOUT (5-STEP STRING LOGIC) ---
+        router_p = f"""
+        First, classify as 'Graphic-Based' or 'Text-Based'. 
+        Then, determine specific item type and dominant language. 
+        Respond ONLY with one line: 'classification,type,language'. 
+        Type from: {type_list}. Language from: {lang_list}.
+        """
+        
         res1 = ai_client.models.generate_content(
             model=scout_cfg.data['model_id'], 
             contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), router_p]
         )
-        discovery = clean_json_output(res1.text)
+        
+        # Parse the CSV-style line
+        parts = [p.strip() for p in res1.text.strip().split(',')]
+        if len(parts) < 3:
+            return {"error": "Scout failed format"}, {"error": "Invalid Scout string"}
 
-        print(discovery)
+        discovery = {
+            "base": parts[0],
+            "label": parts[1],
+            "lang": parts[2],
+            "is_valid": parts[1] in type_list
+        }
 
-        if not discovery.get('is_valid', False):
-            return discovery, {"error": "Item rejected by Scout."}
+        if not discovery["is_valid"]:
+            return discovery, {"error": f"Invalid type: {discovery['label']}"}
 
-        # --- STEP 2: DEEP EXTRACTION ---
+        # --- 3. STEP 2: LIBRARIAN (DEEP EXTRACTION) ---
         tier = 'paid' if user_is_paid else 'free'
         ext_cfg = supabase.table("model_settings").select("model_id").eq("tier_name", tier).single().execute()
         
         task = supabase.table("item_prompts").select("prompt_text").eq("label", discovery['label']).single().execute()
         lang = supabase.table("language_prompts").select("formatting_instruction").eq("lang_code", discovery['lang']).single().execute()
         
-        final_p = f"{task.data['prompt_text']} {lang.data['formatting_instruction']} Output MUST be MARC 21 JSON tags."
+        final_p = f"{task.data['prompt_text']} {lang.data['formatting_instruction']} Output JSON with MARC 21 tags."
         
         res2 = ai_client.models.generate_content(
             model=ext_cfg.data['model_id'],
             contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), final_p]
         )
         
-        meta = clean_json_output(res2.text)
+        # Clean JSON and handle list vs dict safety
+        raw_json = res2.text.strip().replace('```json', '').replace('```', '')
+        meta = json.loads(raw_json)
+        if isinstance(meta, list): meta = meta[0]
+        
         return discovery, meta
 
     except Exception as e:
@@ -67,15 +75,12 @@ def convert_llm_json_to_marc(llm_results):
         record = Record()
         for tag, data in entry.items():
             if tag.isdigit():
-                subfields = []
+                sub_list = []
                 if isinstance(data, dict):
                     for k, v in data.items():
-                        subfields.append(Subfield(code=str(k), value=str(v)))
+                        sub_list.append(Subfield(code=str(k), value=str(v)))
                 else:
-                    subfields.append(Subfield(code='a', value=str(data)))
-                record.add_ordered_field(Field(tag=tag, indicators=['0','0'], subfields=subfields))
+                    sub_list.append(Subfield(code='a', value=str(data)))
+                record.add_ordered_field(Field(tag=tag, indicators=['0','0'], subfields=sub_list))
         memory_file.write(record.as_marc())
     return memory_file.getvalue()
-
-
-
